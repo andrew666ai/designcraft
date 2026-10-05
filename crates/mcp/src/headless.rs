@@ -21,8 +21,8 @@ impl Default for Headless {
 }
 
 /// Hint appended to errors for methods that need a window.
-pub(crate) const NEEDS_APP: &str = "it needs the desktop app: start `designcraft --control 7979` and run the MCP server \
-with `designcraft-cli mcp --connect 7979`";
+pub(crate) const NEEDS_APP: &str = "it needs the desktop app: start `designcraft --control 7979` with a bearer token \
+(`--control-token-file` or the one-shot token on stderr) and run `designcraft-cli mcp --connect 7979` with the same token";
 
 const VIEW: ViewInfo = ViewInfo { zoom: 1.0 };
 

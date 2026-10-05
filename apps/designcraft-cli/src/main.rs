@@ -6,9 +6,11 @@
 //! designcraft-cli describe ID          # one command: label, menu, shortcut, parameters
 //! designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]
 //!                                      # run a command script (crates/engine/src/script.rs): `$N.path` references
-//! designcraft-cli app [--port PORT] COMMAND [JSON]   # run a command in the running app (designcraft --control PORT)
+//! designcraft-cli app [--port PORT] [--control-token HEX | --control-token-file PATH] COMMAND [JSON]
+//!                                      # run a command in the running app (designcraft --control PORT)
 //! designcraft-cli app [--port PORT] --method METHOD [JSON]   # any control-channel method (ui.screenshot, ui.render, …)
-//! designcraft-cli mcp [--connect PORT] [--sample]  # MCP server over stdio (docs/mcp.md)
+//! designcraft-cli mcp [--connect PORT] [--control-token HEX | --control-token-file PATH] [--sample]
+//!                                      # MCP server over stdio (docs/mcp.md). Headless needs no token.
 //! designcraft-cli perf [--pages N] [--frames N] [--chars N] [--images N] [--runs N] [--strict]  # budgets on a synthetic stress document
 //! designcraft-cli bench FILE [--runs N]  # the same measurements on one document
 //! designcraft-cli links                   # Discord, website, app page and GitHub links
@@ -56,7 +58,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: designcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--page N] [--scale S] [--pdf-options JSON] [--export OUT] [--all-pages DIR]\n       designcraft-cli commands [FILTER]\n       designcraft-cli describe COMMAND\n       designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]\n       designcraft-cli app [--port PORT] COMMAND [JSON] | --method METHOD [JSON]\n       designcraft-cli mcp [--connect PORT] [--sample]\n       designcraft-cli perf [--pages N] [--runs N] [--strict]\n       designcraft-cli bench FILE [--runs N]\n       designcraft-cli links\n       designcraft-cli --version"
+                "usage: designcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--page N] [--scale S] [--pdf-options JSON] [--export OUT] [--all-pages DIR]\n       designcraft-cli commands [FILTER]\n       designcraft-cli describe COMMAND\n       designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--control-token HEX | --control-token-file PATH] [--save OUT] [--export OUT] [--keep-going]\n       designcraft-cli app [--port PORT] [--control-token HEX | --control-token-file PATH] COMMAND [JSON] | --method METHOD [JSON]\n       designcraft-cli mcp [--connect PORT] [--control-token HEX | --control-token-file PATH] [--sample]\n       designcraft-cli perf [--pages N] [--runs N] [--strict]\n       designcraft-cli bench FILE [--runs N]\n       designcraft-cli links\n       designcraft-cli --version"
             );
             eprintln!(
                 "\nCommunity: {}  ·  {}  ·  {}",
@@ -67,6 +69,11 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn bridge_token(supplied: Option<String>, token_file: Option<std::path::PathBuf>) -> Result<String, String> {
+    let (supplied, token_file) = designcraft_mcp::token_inputs(supplied, token_file);
+    designcraft_mcp::client_token(supplied.as_deref(), token_file.as_deref())
 }
 
 fn report(r: Result<(), String>) -> ExitCode {
@@ -81,25 +88,36 @@ fn report(r: Result<(), String>) -> ExitCode {
 
 /// `mcp` (headless, in-process engine) or `mcp --connect PORT|HOST:PORT` (drive a running app
 /// started with `designcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
+/// Headless mode does not use a bearer token. Connect mode does, and it refuses non-loopback addresses.
 fn mcp(args: &[String]) -> Result<(), String> {
     use designcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
     let mut connect: Option<String> = None;
     let mut sample = false;
+    let mut token = None;
+    let mut token_file = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--connect" => connect = Some(it.next().cloned().ok_or("--connect needs a port or host:port")?),
             "--sample" => sample = true,
-            other => return Err(format!("unknown mcp option `{other}` (usage: designcraft-cli mcp [--connect PORT] [--sample])")),
+            "--control-token" => token = Some(it.next().cloned().ok_or("--control-token needs a 64-character hex value")?),
+            "--control-token-file" => token_file = Some(it.next().cloned().ok_or("--control-token-file needs a path")?.into()),
+            other => {
+                return Err(format!(
+                    "unknown mcp option `{other}` (usage: designcraft-cli mcp [--connect PORT] [--control-token HEX | --control-token-file PATH] [--sample])"
+                ));
+            }
         }
     }
     let backend: Box<dyn Backend> = match connect {
         Some(c) => {
             let addr = control_addr(&c);
-            Box::new(
-                Remote::connect(&addr)
-                    .map_err(|e| format!("cannot connect to the DesignCraft app at {addr}: {e} (start it with `designcraft --control PORT`)"))?,
-            )
+            let token = bridge_token(token, token_file)?;
+            Box::new(Remote::connect(&addr, &token).map_err(|e| {
+                format!(
+                    "cannot connect to the DesignCraft app at {addr}: {e} (start it with `designcraft --control PORT` and the same control token)"
+                )
+            })?)
         }
         None => {
             let mut h = Headless::with_document();
@@ -245,6 +263,8 @@ fn script(args: &[String]) -> Result<(), String> {
     let mut save: Option<String> = None;
     let mut export: Vec<String> = Vec::new();
     let mut keep_going = false;
+    let mut token = None;
+    let mut token_file = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = || it.next().cloned().ok_or_else(|| format!("{a} needs a value"));
@@ -256,6 +276,8 @@ fn script(args: &[String]) -> Result<(), String> {
             }
             "--sample" => setup.push(("file.newSample".into(), json!({}))),
             "--connect" => connect = Some(val()?),
+            "--control-token" => token = Some(val()?),
+            "--control-token-file" => token_file = Some(val()?.into()),
             "--save" => save = Some(val()?),
             "--export" => export.push(val()?),
             "--keep-going" => keep_going = true,
@@ -263,6 +285,8 @@ fn script(args: &[String]) -> Result<(), String> {
             other => return Err(format!("unknown script option `{other}`")),
         }
     }
+    // A missing bridge token fails before the script is read, so stdin is not consumed on the way to the error.
+    let token = if connect.is_some() { Some(bridge_token(token, token_file)?) } else { None };
     let text = match file.as_deref() {
         None | Some("-") => {
             let mut t = String::new();
@@ -275,10 +299,12 @@ fn script(args: &[String]) -> Result<(), String> {
     let mut backend: Box<dyn Backend> = match &connect {
         Some(c) => {
             let addr = control_addr(c);
-            Box::new(
-                Remote::connect(&addr)
-                    .map_err(|e| format!("cannot connect to the DesignCraft app at {addr}: {e} (start it with `designcraft --control PORT`)"))?,
-            )
+            let token = token.ok_or("control token missing")?;
+            Box::new(Remote::connect(&addr, &token).map_err(|e| {
+                format!(
+                    "cannot connect to the DesignCraft app at {addr}: {e} (start it with `designcraft --control PORT` and the same control token)"
+                )
+            })?)
         }
         None => Box::new(Headless::with_document()),
     };
@@ -329,18 +355,24 @@ fn app(args: &[String]) -> Result<(), String> {
     use designcraft_mcp::{Backend, Remote, control_addr};
     let mut port = "7979".to_string();
     let mut method: Option<String> = None;
+    let mut token = None;
+    let mut token_file = None;
     let mut rest: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--port" | "--connect" => port = it.next().cloned().ok_or("--port needs a value")?,
             "--method" => method = Some(it.next().cloned().ok_or("--method needs a value")?),
+            "--control-token" => token = Some(it.next().cloned().ok_or("--control-token needs a 64-character hex value")?),
+            "--control-token-file" => token_file = Some(it.next().cloned().ok_or("--control-token-file needs a path")?.into()),
             _ => rest.push(a.clone()),
         }
     }
     let addr = control_addr(&port);
-    let mut r = Remote::connect(&addr)
-        .map_err(|e| format!("cannot connect to the DesignCraft app at {addr}: {e} (start it with `designcraft --control {port}`)"))?;
+    let token = bridge_token(token, token_file)?;
+    let mut r = Remote::connect(&addr, &token).map_err(|e| {
+        format!("cannot connect to the DesignCraft app at {addr}: {e} (start it with `designcraft --control {port}` and the same control token)")
+    })?;
     let json_arg =
         |s: Option<&String>| -> Result<Value, String> { s.map_or(Ok(json!({})), |t| serde_json::from_str(t).map_err(|e| format!("bad JSON: {e}"))) };
     let out = match method {

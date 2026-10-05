@@ -13,9 +13,11 @@ Build the CLI (`cargo build --release -p designcraft-cli`), then:
 # Headless: an in-process engine, no window
 claude mcp add designcraft -- /path/to/target/release/designcraft-cli mcp
 
-# Drive the running desktop app (start it first with a control port)
-designcraft --control 7979
-claude mcp add designcraft-app -- /path/to/target/release/designcraft-cli mcp --connect 7979
+# Drive the running desktop app. Start it with a private token file, and point the
+# bridge at the same file. Stdio MCP (`mcp` without --connect) stays the default and
+# does not use a token.
+# designcraft --control 7979 --control-token-file ~/.config/designcraft/control.token
+claude mcp add designcraft-app -- /path/to/target/release/designcraft-cli mcp --connect 7979 --control-token-file ~/.config/designcraft/control.token
 ```
 
 Other MCP clients use the same command line, e.g. in a JSON config:
@@ -28,7 +30,7 @@ Other MCP clients use the same command line, e.g. in a JSON config:
 
 | | Headless (`mcp`) | Connected (`mcp --connect PORT` or `HOST:PORT`) |
 |---|---|---|
-| Engine | In-process `designcraft_engine::Session`, starts with an empty Letter document (`--sample` opens the sample magazine) | The app's session, through its loopback control channel ([control-protocol.md](control-protocol.md)) |
+| Engine | In-process `designcraft_engine::Session`, starts with an empty Letter document (`--sample` opens the sample magazine). No token and no port. | The app's session, through its loopback control channel ([control-protocol.md](control-protocol.md)). The bridge sends the bearer token before any tool call and refuses non-loopback addresses. |
 | Rendering | `designcraft-render` (CPU) | The app's renderer |
 | Window tools (`screenshot`, `click`, `drag`, `menu_list`, `ui_inspect`, `ui_set`, `dialog_*`) | Return an error explaining how to connect | Work |
 | UI-only commands (`view.*`, `window.*`, `app.*`) via `execute` | Error | Work |

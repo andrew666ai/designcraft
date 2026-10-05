@@ -99,14 +99,16 @@ by its own renderer. Try it yourself with `File → New → Sample Document`, or
 ```sh
 cargo run --release -p designcraft                         # desktop app (start screen)
 cargo run --release -p designcraft -- --sample             # open the sample magazine
-cargo run --release -p designcraft -- --sample --control 7979   # + JSON control channel
+cargo run --release -p designcraft -- --sample --control 7979 --control-token-file ~/.config/designcraft/control.token   # + JSON control channel
 cargo run --release -p designcraft-cli -- run --sample --all-pages out/       # headless: render every page to PNG
 cargo run --release -p designcraft-cli -- commands         # list every command
 cargo xtask ci                                             # fmt, clippy, tests, assets, layering, wasm
 ```
 
-To drive a running app, send JSON lines to `127.0.0.1:7979`. The protocol is described in
-[`docs/control-protocol.md`](docs/control-protocol.md).
+To drive a running app, send JSON lines to `127.0.0.1:7979`. The first line is
+`{"method":"auth","params":{"token":"<64 hex characters>"}}`. Prefer a token file; if you omit one,
+the app prints a one-shot token on stderr. The protocol is described in
+[`docs/control-protocol.md`](docs/control-protocol.md). See [`SECURITY.md`](SECURITY.md).
 
 ### Web
 

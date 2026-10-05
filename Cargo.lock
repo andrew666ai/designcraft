@@ -858,6 +858,7 @@ name = "designcraft"
 version = "0.2.0"
 dependencies = [
  "designcraft-engine",
+ "designcraft-mcp",
  "designcraft-ui-egui",
  "eframe",
  "egui",
@@ -1028,6 +1029,7 @@ dependencies = [
  "designcraft-geom",
  "designcraft-render",
  "designcraft-tools",
+ "getrandom 0.3.4",
  "image",
  "log",
  "serde_json",

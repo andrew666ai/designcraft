@@ -7,7 +7,7 @@ three ways — pick whichever fits the agent:
 |---|---|---|
 | **CLI** | One-shot jobs, shell pipelines, CI: build or edit a document and export it | `designcraft-cli run`, `script`, `app`, `describe`, `commands` |
 | **MCP** | Claude and other MCP clients; images of pages and the window come back as content | `designcraft-cli mcp` ([mcp.md](mcp.md)) |
-| **Control channel** | Your own client driving the running app (JSON lines over TCP) | `designcraft --control 7979` ([control-protocol.md](control-protocol.md)) |
+| **Control channel** | Your own client driving the running app (JSON lines over TCP, bearer token, loopback only) | `designcraft --control 7979` ([control-protocol.md](control-protocol.md), [SECURITY.md](../SECURITY.md)) |
 
 ## Discover commands
 
@@ -34,7 +34,8 @@ text.select  {"story": "$3.story", "anchor": 4, "focus": 4}
 xref.insert  {"paragraph": "Results", "format": "Paragraph Text & Page Number"}
 DCS
 designcraft-cli script page.dcs --save page.designcraft --export page.pdf --export page.png
-designcraft-cli script page.dcs --connect 7979      # the same steps, live in the running app
+DESIGNCRAFT_CONTROL_TOKEN_FILE=~/.config/designcraft/control.token \
+  designcraft-cli script page.dcs --connect 7979      # the same steps, live in the running app
 ```
 
 The result is JSON: `{"completed": n, "results": [...]}`, plus `failedIndex` / `failedCommand` / `error` when a step
@@ -44,9 +45,11 @@ same references, and MCP's `batch` tool takes `commands` or `script` text with t
 ## The running app
 
 ```sh
-designcraft --sample --control 7979 &
-designcraft-cli app type.changeCase '{"case": "title"}'            # any command
-designcraft-cli app --method ui.screenshot '{"path": "/tmp/w.png"}' # any control-channel method
+designcraft --sample --control 7979 --control-token-file ~/.config/designcraft/control.token &
+DESIGNCRAFT_CONTROL_TOKEN_FILE=~/.config/designcraft/control.token \
+  designcraft-cli app type.changeCase '{"case": "title"}'            # any command
+DESIGNCRAFT_CONTROL_TOKEN_FILE=~/.config/designcraft/control.token \
+  designcraft-cli app --method ui.screenshot '{"path": "/tmp/w.png"}' # any control-channel method
 ```
 
 `ui.menu.invoke {command}` without params acts like choosing the menu item: a command labelled "…" opens its

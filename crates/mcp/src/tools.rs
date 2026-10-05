@@ -77,7 +77,7 @@ fn tool(name: &str, title: &str, desc: &str, schema: Value, read_only: bool) -> 
     })
 }
 
-const APP_ONLY: &str = " Desktop app only (`designcraft-cli mcp --connect PORT`).";
+const APP_ONLY: &str = " Desktop app only (`designcraft-cli mcp --connect PORT` with the control bearer token).";
 
 /// All tools, in `tools/list` order.
 pub fn tool_definitions() -> Vec<Value> {
