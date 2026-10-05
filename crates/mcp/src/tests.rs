@@ -1,9 +1,10 @@
-use std::io::{BufRead, BufReader, Write};
-
 use designcraft_engine::cmd::{base64_decode, base64_encode};
 use serde_json::{Value, json};
 
-use crate::{Backend, Headless, PROTOCOL_VERSION, Remote, Server, control_addr, tool_definitions};
+use crate::{Backend, Headless, MAX_REQUEST_BYTES, PROTOCOL_VERSION, Remote, Server, control_addr, serve_authenticated, tool_definitions};
+
+/// 64 hex digits shared by the stand-in control server and the bridge under test.
+const CONTROL_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn server() -> Server {
     Server::new(Box::new(Headless::with_document()))
@@ -333,32 +334,30 @@ fn list_commands_filters() {
 // ---------- connect mode ----------
 
 /// A fake app on a loopback port answering a few control methods, recording what it got.
+/// The first line must be `auth`; methods are dispatched only after that succeeds.
 fn fake_app() -> (String, std::sync::mpsc::Receiver<Value>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let Ok((stream, _)) = listener.accept() else { return };
-        let mut out = stream.try_clone().unwrap();
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else { break };
-            let req: Value = serde_json::from_str(&line).unwrap();
-            let p = &req["params"];
-            let reply = match req["method"].as_str().unwrap() {
+        serve_authenticated(stream, CONTROL_TOKEN, move |method, params| {
+            let reply = match method.as_str() {
                 "ui.screenshot" => {
                     let px = designcraft_render::Rendered { width: 3, height: 3, pixels: vec![0; 36] };
-                    std::fs::write(p["path"].as_str().unwrap(), px.to_png()).unwrap();
-                    json!({"ok": true, "result": {"path": p["path"], "width": 3, "height": 3}})
+                    let path = params["path"].as_str().unwrap_or("");
+                    if !path.is_empty() {
+                        let _ = std::fs::write(path, px.to_png());
+                    }
+                    json!({"ok": true, "result": {"path": path, "width": 3, "height": 3}})
                 }
                 "ui.click" => json!({"ok": true, "result": null}),
                 "ui.inspect" => json!({"ok": true, "result": {"tool": "selection"}}),
                 _ => json!({"ok": false, "error": "nope"}),
             };
-            tx.send(req.clone()).unwrap();
-            let mut reply = reply;
-            reply["id"] = req["id"].clone();
-            writeln!(out, "{reply}").unwrap();
-        }
+            let _ = tx.send(json!({"method": method, "params": params}));
+            reply
+        });
     });
     (addr, rx)
 }
@@ -366,7 +365,7 @@ fn fake_app() -> (String, std::sync::mpsc::Receiver<Value>) {
 #[test]
 fn connect_mode_forwards_to_the_app() {
     let (addr, seen) = fake_app();
-    let remote = Remote::connect(&addr).unwrap();
+    let remote = Remote::connect(&addr, CONTROL_TOKEN).unwrap();
     assert!(remote.has_ui());
     let mut s = Server::new(Box::new(remote));
     let r = call(&mut s, "screenshot", json!({}));
@@ -389,7 +388,24 @@ fn connect_mode_forwards_to_the_app() {
 fn control_addr_accepts_port_or_address() {
     assert_eq!(control_addr("7979"), "127.0.0.1:7979");
     assert_eq!(control_addr("localhost:8000"), "localhost:8000");
-    assert!(Remote::connect("127.0.0.1:1").is_err());
+    assert!(Remote::connect("127.0.0.1:1", CONTROL_TOKEN).is_err());
+    assert!(Remote::connect("192.0.2.1:9", CONTROL_TOKEN).is_err());
+}
+
+#[test]
+fn serve_rejects_an_oversized_request_before_the_next_call() {
+    let mut s = server();
+    let mut input = vec![b'x'; MAX_REQUEST_BYTES + 8];
+    input.extend_from_slice(b"\n");
+    input.extend_from_slice(br#"{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}"#);
+    input.push(b'\n');
+    let mut out = Vec::new();
+    s.serve(std::io::Cursor::new(input), &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0]["error"]["message"].as_str().unwrap().contains("request exceeds"));
+    assert_eq!(lines[1]["id"], 2);
+    assert_eq!(lines[1]["result"], json!({}));
 }
 
 #[test]

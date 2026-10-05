@@ -3,10 +3,21 @@
 Start the app with `--control <port>` (or `DESIGNCRAFT_CONTROL_PORT`). The server listens on
 `127.0.0.1` only and speaks JSON lines: one request object per line, one reply per line.
 
+The first line on every connection must authenticate. A 64-hex token comes from
+`--control-token-file` / `DESIGNCRAFT_CONTROL_TOKEN_FILE` (created mode `0600` on Unix if missing),
+`--control-token` / `DESIGNCRAFT_CONTROL_TOKEN`, or — if you pass neither — one line on stderr for
+that launch. Prefer a token file. See [SECURITY.md](../SECURITY.md).
+
 ```json
+{"id": "auth", "method": "auth", "params": {"token": "<64 hex characters>"}}
+{"id": "auth", "ok": true, "result": {"authenticated": true}}
 {"id": 1, "method": "engine.execute", "params": {"command": "frame.create", "params": {"rect": [36, 36, 300, 200], "content": "text"}}}
 {"id": 1, "ok": true, "result": {"id": 10, "story": 11}}
 ```
+
+Anything else as the first line, including a wrong token, returns `authentication required` and
+closes the connection. The listener accepts at most 16 connections, request lines up to 1 MiB and
+replies up to 8 MiB. Do not tunnel the channel off the machine.
 
 | Method | Params | What it does |
 |---|---|---|

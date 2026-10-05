@@ -4,7 +4,10 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_designcraft-cli"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_designcraft-cli"));
+    cmd.env_remove("DESIGNCRAFT_CONTROL_TOKEN");
+    cmd.env_remove("DESIGNCRAFT_CONTROL_TOKEN_FILE");
+    cmd
 }
 
 #[test]
@@ -65,4 +68,14 @@ fn run_cmd_references_and_describe() {
     let out = cli().args(["commands", "footnote."]).output().unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(v.as_array().unwrap().iter().all(|c| c.to_string().contains("footnote")));
+}
+
+#[test]
+fn connect_without_a_token_fails_before_opening_a_socket() {
+    for args in [vec!["app", "file.new"], vec!["mcp", "--connect", "127.0.0.1:1"], vec!["script", "--connect", "7979", "-"]] {
+        let out = cli().args(&args).stdin(Stdio::null()).output().unwrap();
+        assert!(!out.status.success(), "{args:?} succeeded");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("DESIGNCRAFT_CONTROL_TOKEN") || err.contains("control token"), "{args:?}: {err}");
+    }
 }

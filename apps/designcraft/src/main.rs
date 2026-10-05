@@ -1,10 +1,11 @@
 //! DesignCraft desktop app.
 //!
-//! Usage: `designcraft [--control <port>] [--sample] [files…]`
+//! Usage: `designcraft [--control <port>] [--control-token HEX | --control-token-file PATH] [--sample] [files…]`
 //!
-//! `--control <port>` (or `DESIGNCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
-//! `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
-//! See `designcraft_ui_egui::control` for the methods.
+//! `--control <port>` (or `DESIGNCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
+//! The first line must authenticate with a 256-bit bearer token; only then does
+//! `{"id":1,"method":"ui.inspect","params":{}}` get `{"id":1,"ok":true,"result":…}`.
+//! See `designcraft_ui_egui::control` for the methods and `SECURITY.md` for the token.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod control_server;
@@ -170,12 +171,26 @@ fn app_icon() -> Option<egui::IconData> {
 
 fn main() -> eframe::Result {
     let mut control_port: Option<u16> = std::env::var("DESIGNCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
+    let mut control_token = None;
+    let mut control_token_file = None;
     let mut files = Vec::new();
     let mut sample = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--control" => control_port = args.next().and_then(|p| p.parse().ok()),
+            "--control-token" => {
+                control_token = Some(args.next().unwrap_or_else(|| {
+                    eprintln!("designcraft: --control-token needs a 64-character hex value");
+                    std::process::exit(2);
+                }));
+            }
+            "--control-token-file" => {
+                control_token_file = Some(args.next().map(std::path::PathBuf::from).unwrap_or_else(|| {
+                    eprintln!("designcraft: --control-token-file needs a path");
+                    std::process::exit(2);
+                }));
+            }
             "--sample" => sample = true,
             "--version" => {
                 println!("designcraft {}", env!("CARGO_PKG_VERSION"));
@@ -184,6 +199,28 @@ fn main() -> eframe::Result {
             _ => files.push(a),
         }
     }
+    // Resolved only when the control port is on, so a normal launch never mints or prints a token.
+    let control = control_port.map(|port| {
+        let (supplied, token_file) = designcraft_mcp::token_inputs(control_token, control_token_file);
+        match designcraft_mcp::server_token(supplied.as_deref(), token_file.as_deref()) {
+            Ok(token) => {
+                if let Some(path) = token_file {
+                    eprintln!("designcraft: control token file: {}", path.display());
+                } else if supplied.is_none() {
+                    // One line, this launch only, so a local operator can hand it to the bridge.
+                    // Prefer --control-token-file so the token is not written to the terminal.
+                    eprintln!("designcraft: control token for this launch (stderr only): {token}");
+                } else {
+                    eprintln!("designcraft: using supplied control token");
+                }
+                (port, token)
+            }
+            Err(e) => {
+                eprintln!("designcraft: cannot configure control authentication: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("DesignCraft")
@@ -223,8 +260,8 @@ fn main() -> eframe::Result {
             }
             load_prefs(&mut app);
             app.integrated_titlebar = cfg!(target_os = "macos");
-            if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
+            if let Some((port, token)) = control {
+                let rx = control_server::start(port, token, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             }
             if sample {
